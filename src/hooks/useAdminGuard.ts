@@ -13,18 +13,26 @@ export function useAdminGuard() {
     const unsubscribe = onAuthStateChange(async (user) => {
       if (!user) {
         router.replace("/login");
+        setAuthorized(false);
+        setLoading(false);
         return;
       }
 
-      const profile = await getUserProfile(user.uid);
-
-      if (profile?.role !== "admin") {
-        router.replace("/"); // kick non-admins back to landing
-        return;
+      try {
+        const profile = await getUserProfile(user.uid);
+        if (profile?.role !== "admin") {
+          router.replace("/");
+          setAuthorized(false);
+          setLoading(false);
+          return;
+        }
+        setAuthorized(true);
+      } catch {
+        router.replace("/login");
+        setAuthorized(false);
+      } finally {
+        setLoading(false);
       }
-
-      setAuthorized(true);
-      setLoading(false);
     });
 
     return () => unsubscribe();

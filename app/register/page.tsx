@@ -2,7 +2,11 @@
 "use client";
 
 import { useState } from "react";
-import { registerUser, isValidEmail } from "../../src/services/authService";
+import {
+  registerUser,
+  isValidEmail,
+  AUTH_BACKEND_ENABLED,
+} from "../../src/services/authService";
 import { useRouter } from "next/navigation";
 
 export default function Register() {
@@ -61,11 +65,26 @@ export default function Register() {
     try {
       const user = await registerUser({ firstName, lastName, email, password });
       console.log("Registered:", user.uid);
-      setSuccessMessage("Account created! Please verify your email before logging in.");
-      setTimeout(() => { router.push("/login"); }, 2000);
+      if (AUTH_BACKEND_ENABLED) {
+        setSuccessMessage(
+          "Account created! Please verify your email before logging in."
+        );
+        setTimeout(() => {
+          router.push("/login");
+        }, 2000);
+      } else {
+        setSuccessMessage("Account created (dev mode). Redirecting…");
+        setTimeout(() => {
+          router.push("/");
+        }, 800);
+      }
     } catch (error: unknown) {
       if (error instanceof Error) {
-        if (error.message.includes("email-already-in-use")) setEmailError("This email is already registered.");
+        if (
+          error.message.includes("email-already-in-use") ||
+          error.message === "email-already-in-use"
+        )
+          setEmailError("This email is already registered.");
         else if (error.message.includes("weak-password")) setPasswordError("Password is too weak. Use at least 6 characters.");
         else setGeneralError(error.message);
       }

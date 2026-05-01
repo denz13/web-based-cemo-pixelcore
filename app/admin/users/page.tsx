@@ -2,17 +2,10 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useAdminGuard } from "../../../src/hooks/useAdminGuard";
-import { db } from "../../../../shared/firebase";
 import {
-  collection,
-  getDocs,
-  doc,
-  updateDoc,
-  deleteDoc,
-  addDoc,
-  serverTimestamp,
-} from "firebase/firestore";
-import { UserProfile } from "../../../src/services/authService";
+  AUTH_BACKEND_ENABLED,
+  UserProfile,
+} from "../../../src/services/authService";
 
 export default function UserManagement() {
   const { loading, authorized } = useAdminGuard();
@@ -36,9 +29,12 @@ export default function UserManagement() {
   const fetchUsers = useCallback(async () => {
     setFetching(true);
     try {
-      const snapshot = await getDocs(collection(db, "users"));
-      const list = snapshot.docs.map((d) => d.data() as UserProfile);
-      setUsers(list);
+      if (!AUTH_BACKEND_ENABLED) {
+        setUsers([]);
+        setError("");
+        return;
+      }
+      setError("Firestore is not wired in this build.");
     } catch {
       setError("Failed to fetch users.");
     } finally {
@@ -66,49 +62,28 @@ export default function UserManagement() {
   // ─── CRUD ─────────────────────────────────────────────────────────────────
   const handleSave = async () => {
     setError("");
-    try {
-      if (editingUser) {
-        await updateDoc(doc(db, "users", editingUser.uid), {
-          firstName: formData.firstName,
-          lastName: formData.lastName,
-          role: formData.role,
-          isActive: formData.isActive,
-        });
-        setSuccessMessage("User updated successfully.");
-      } else {
-        await addDoc(collection(db, "users"), {
-          ...formData,
-          uid: "pending",
-          createdAt: serverTimestamp(),
-        });
-        setSuccessMessage("User profile created. Remember to also create the Auth account in Firebase Console.");
-      }
-      setShowModal(false);
-      fetchUsers();
-    } catch {
-      setError("Failed to save user.");
+    if (!AUTH_BACKEND_ENABLED) {
+      setError("Saving users requires enabling the auth backend (Firebase).");
+      return;
     }
+    setError("Firestore is not wired in this build.");
   };
 
-  const handleToggleActive = async (user: UserProfile) => {
-    try {
-      await updateDoc(doc(db, "users", user.uid), { isActive: !user.isActive });
-      setSuccessMessage(`User ${user.isActive ? "deactivated" : "activated"}.`);
-      fetchUsers();
-    } catch {
-      setError("Failed to update user status.");
+  const handleToggleActive = async (_user: UserProfile) => {
+    if (!AUTH_BACKEND_ENABLED) {
+      setError("Firestore is not enabled.");
+      return;
     }
+    setError("Firestore is not wired in this build.");
   };
 
   const handleDelete = async (user: UserProfile) => {
     if (!confirm(`Are you sure you want to delete ${user.firstName} ${user.lastName}? This cannot be undone.`)) return;
-    try {
-      await deleteDoc(doc(db, "users", user.uid));
-      setSuccessMessage("User deleted.");
-      fetchUsers();
-    } catch {
-      setError("Failed to delete user.");
+    if (!AUTH_BACKEND_ENABLED) {
+      setError("Firestore is not enabled.");
+      return;
     }
+    setError("Firestore is not wired in this build.");
   };
 
   // ─── Role badge color ─────────────────────────────────────────────────────
@@ -138,11 +113,17 @@ export default function UserManagement() {
   if (!authorized) return null;
 
   return (
-    <>
+    <div className="um-page" data-user-management-page>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Lora:wght@500;600&family=DM+Sans:wght@300;400;500&display=swap');
 
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        /* Scoped only to this page — a global * reset breaks the app shell (sidebar, header). */
+        .um-page,
+        .um-page *,
+        .um-page *::before,
+        .um-page *::after {
+          box-sizing: border-box;
+        }
 
         .um-root {
           min-height: 100vh;
@@ -580,6 +561,6 @@ export default function UserManagement() {
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }

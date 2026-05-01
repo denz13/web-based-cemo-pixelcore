@@ -3,13 +3,27 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { loginUser, forgotPassword, isValidEmail, getUserProfile } from "../../src/services/authService";
+import {
+  loginUser,
+  forgotPassword,
+  isValidEmail,
+  getUserProfile,
+  AUTH_BACKEND_ENABLED,
+} from "../../src/services/authService";
+
+/** Prefill lang kapag dev session (walang Firebase). */
+const DEV_LOGIN_EMAIL = "admin@localhost";
+const DEV_LOGIN_PASSWORD = "demo1234";
 
 export default function Login() {
   const router = useRouter();
 
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [email, setEmail] = useState(
+    AUTH_BACKEND_ENABLED ? "" : DEV_LOGIN_EMAIL
+  );
+  const [password, setPassword] = useState(
+    AUTH_BACKEND_ENABLED ? "" : DEV_LOGIN_PASSWORD
+  );
   const [rememberMe, setRememberMe] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
@@ -35,7 +49,14 @@ export default function Login() {
     setGeneralError("");
     setSuccessMessage("");
 
-    if (!email || !isValidEmail(email)) { setEmailError("Please enter a valid email address."); return; }
+    if (!email.trim()) {
+      setEmailError("Email is required.");
+      return;
+    }
+    if (!isValidEmail(email)) {
+      setEmailError("Please enter a valid email address.");
+      return;
+    }
     if (!password) { setPasswordError("Password is required."); return; }
 
     setLoading(true);
@@ -64,7 +85,14 @@ export default function Login() {
   const handleForgotPassword = async () => {
     setGeneralError("");
     setSuccessMessage("");
-    if (!email || !isValidEmail(email)) { setEmailError("Enter your email address above first."); return; }
+    if (!email.trim()) {
+      setEmailError("Enter your email address above first.");
+      return;
+    }
+    if (!isValidEmail(email)) {
+      setEmailError("Please enter a valid email address.");
+      return;
+    }
     setLoading(true);
     try {
       await forgotPassword(email);
@@ -363,7 +391,9 @@ export default function Login() {
                 </span>
                 <input
                   id="email"
-                  type="email"
+                  type="text"
+                  inputMode="email"
+                  autoComplete="email"
                   placeholder="you@example.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}

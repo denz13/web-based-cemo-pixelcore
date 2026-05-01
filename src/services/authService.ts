@@ -1,16 +1,86 @@
-import {
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signOut,
-  sendPasswordResetEmail,
-  onAuthStateChanged,
-  User,
-} from "firebase/auth";
-import { doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
-import { auth, db } from "../../../shared/firebase";
-import { sendEmailVerification } from "firebase/auth";
+// Set true kapag Firebase na ang backend; i-wire ulit ang SDK calls.
+export const AUTH_BACKEND_ENABLED = false;
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+const firebaseNotWired =
+  "Firebase auth is not wired in this build. Keep AUTH_BACKEND_ENABLED false or implement Firebase.";
+
+/** Temporary dev session (localStorage). Hindi ito tunay na seguridad. */
+const DEV_SESSION_KEY = "cemo-pixelcore-dev-session";
+
+type DevSession = {
+  uid: string;
+  email: string;
+  emailVerified: boolean;
+  firstName: string;
+  lastName: string;
+  role: string;
+};
+
+const authListeners = new Set<(user: AuthUser | null) => void>();
+
+function readDevSession(): DevSession | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(DEV_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as DevSession;
+    if (!parsed?.uid || !parsed?.email) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeDevSession(session: DevSession) {
+  localStorage.setItem(DEV_SESSION_KEY, JSON.stringify(session));
+}
+
+function clearDevSession() {
+  localStorage.removeItem(DEV_SESSION_KEY);
+}
+
+function notifyAuthListeners(user: AuthUser | null) {
+  authListeners.forEach((cb) => cb(user));
+}
+
+function devEmailIsAdmin(email: string): boolean {
+  return email.trim().toLowerCase() === "admin@localhost";
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (e) => {
+    if (e.key !== DEV_SESSION_KEY) return;
+    const s = readDevSession();
+    notifyAuthListeners(s ? devSessionToAuthUser(s) : null);
+  });
+}
+
+function devSessionToAuthUser(s: DevSession): AuthUser {
+  return {
+    uid: s.uid,
+    email: s.email,
+    emailVerified: s.emailVerified,
+  };
+}
+
+function devSessionToProfile(s: DevSession): UserProfile {
+  return {
+    uid: s.uid,
+    firstName: s.firstName,
+    lastName: s.lastName,
+    email: s.email,
+    role: s.role,
+    createdAt: null,
+    isActive: true,
+  };
+}
+
+/** Minimal shape login/register return for callers */
+export interface AuthUser {
+  uid: string;
+  email: string | null;
+  emailVerified: boolean;
+}
 
 export interface RegisterData {
   firstName: string;
@@ -34,98 +104,100 @@ export interface UserProfile {
   isActive: boolean;
 }
 
-// ─── Email Validation ─────────────────────────────────────────────────────────
-
 export const isValidEmail = (email: string): boolean => {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return emailRegex.test(email);
+  const t = email.trim();
+  if (!t || /\s/.test(t) || !t.includes("@")) return false;
+  const at = t.lastIndexOf("@");
+  const local = t.slice(0, at);
+  const domain = t.slice(at + 1).toLowerCase();
+  if (!local || !domain || domain.includes("@")) return false;
+  if (!/^[^\s@]+$/.test(local)) return false;
+  // Dev: admin@localhost
+  if (domain === "localhost" || domain.endsWith(".local")) return true;
+  // Normal: must have a dot in the domain (you@example.com)
+  return domain.includes(".");
 };
 
-// ─── Register ─────────────────────────────────────────────────────────────────
+export const registerUser = async (data: RegisterData): Promise<AuthUser> => {
+  if (AUTH_BACKEND_ENABLED) throw new Error(firebaseNotWired);
 
-export const registerUser = async (data: RegisterData): Promise<User> => {
   const { firstName, lastName, email, password } = data;
+  if (!firstName.trim() || !lastName.trim()) {
+    throw new Error("First and last name are required.");
+  }
+  if (!isValidEmail(email)) throw new Error("Please enter a valid email address.");
+  if (password.length < 6) throw new Error("Password must be at least 6 characters.");
 
-  if (!isValidEmail(email)) {
-    throw new Error("Please enter a valid email address.");
+  const normalized = email.trim().toLowerCase();
+  const existing = readDevSession();
+  if (existing?.email.toLowerCase() === normalized) {
+    throw new Error("email-already-in-use");
   }
 
-  if (password.length < 6) {
-    throw new Error("Password must be at least 6 characters.");
-  }
-
-  const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-  const user = userCredential.user;
-
-  //  SEND EMAIL VERIFICATION
-  await sendEmailVerification(user);
-
-  await setDoc(doc(db, "users", user.uid), {
-    uid: user.uid,
-    firstName,
-    lastName,
-    email,
-    role: "citizen",
-    createdAt: serverTimestamp(),
-    isActive: true,
-  });
-
-  return user;
+  const session: DevSession = {
+    uid: `dev:${normalized}`,
+    email: email.trim(),
+    emailVerified: true,
+    firstName: firstName.trim(),
+    lastName: lastName.trim(),
+    role: devEmailIsAdmin(email) ? "admin" : "citizen",
+  };
+  writeDevSession(session);
+  notifyAuthListeners(devSessionToAuthUser(session));
+  return devSessionToAuthUser(session);
 };
 
-// ─── Login ────────────────────────────────────────────────────────────────────
+export const loginUser = async (data: LoginData): Promise<AuthUser> => {
+  if (AUTH_BACKEND_ENABLED) throw new Error(firebaseNotWired);
 
-export const loginUser = async (data: LoginData): Promise<User> => {
   const { email, password } = data;
-
-  if (!isValidEmail(email)) {
-    throw new Error("Please enter a valid email address.");
+  if (!isValidEmail(email)) throw new Error("Please enter a valid email address.");
+  if (password.length < 4) {
+    throw new Error("invalid-credential");
   }
 
-  const userCredential = await signInWithEmailAndPassword(auth, email, password);
-  const user = userCredential.user;
-
-  // Fetch Firestore profile to check role
-  const profile = await getUserProfile(user.uid);
-
-  // Admins are created manually so skip email verification for them
-  if (profile?.role !== "admin" && !user.emailVerified) {
-    await signOut(auth);
-    throw new Error("Please verify your email before logging in.");
-  }
-
-  return user;
+  const normalized = email.trim().toLowerCase();
+  const session: DevSession = {
+    uid: `dev:${normalized}`,
+    email: email.trim(),
+    emailVerified: true,
+    firstName: normalized.split("@")[0] ?? "User",
+    lastName: "",
+    role: devEmailIsAdmin(email) ? "admin" : "citizen",
+  };
+  writeDevSession(session);
+  notifyAuthListeners(devSessionToAuthUser(session));
+  return devSessionToAuthUser(session);
 };
-
-// ─── Logout ───────────────────────────────────────────────────────────────────
 
 export const logoutUser = async (): Promise<void> => {
-  await signOut(auth);
+  if (AUTH_BACKEND_ENABLED) throw new Error(firebaseNotWired);
+
+  clearDevSession();
+  notifyAuthListeners(null);
 };
 
-// ─── Forgot Password ──────────────────────────────────────────────────────────
-
-export const forgotPassword = async (email: string): Promise<void> => {
-  if (!isValidEmail(email)) {
-    throw new Error("Please enter a valid email address.");
-  }
-  await sendPasswordResetEmail(auth, email);
+export const forgotPassword = async (_email: string): Promise<void> => {
+  if (AUTH_BACKEND_ENABLED) throw new Error(firebaseNotWired);
+  await Promise.resolve();
 };
-
-// ─── Get User Profile from Firestore ─────────────────────────────────────────
 
 export const getUserProfile = async (uid: string): Promise<UserProfile | null> => {
-  const docRef = doc(db, "users", uid);
-  const docSnap = await getDoc(docRef);
+  if (AUTH_BACKEND_ENABLED) throw new Error(firebaseNotWired);
 
-  if (docSnap.exists()) {
-    return docSnap.data() as UserProfile;
-  }
-  return null;
+  await Promise.resolve();
+  const s = readDevSession();
+  if (!s || s.uid !== uid) return null;
+  return devSessionToProfile(s);
 };
 
-// ─── Auth State Listener ──────────────────────────────────────────────────────
-
-export const onAuthStateChange = (callback: (user: User | null) => void) => {
-  return onAuthStateChanged(auth, callback);
+export const onAuthStateChange = (callback: (user: AuthUser | null) => void) => {
+  authListeners.add(callback);
+  queueMicrotask(() => {
+    const s = readDevSession();
+    callback(s ? devSessionToAuthUser(s) : null);
+  });
+  return () => {
+    authListeners.delete(callback);
+  };
 };
