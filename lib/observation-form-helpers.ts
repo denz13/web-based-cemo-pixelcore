@@ -64,6 +64,61 @@ export function inferObservationType(
   return null;
 }
 
+export function getCategoryFromTaxonomy(taxon: TaxonResolution): { category: ObservationType, subCategory: string } {
+  const kingdom = taxon.kingdom || taxon.iconicTaxonName || "";
+  const className = taxon.className || taxon.iconicTaxonName || "";
+
+  let category: ObservationType = "Fauna";
+  let subCategory = "";
+
+  if (
+    kingdom.toLowerCase().includes("animalia") ||
+    ["Mammalia", "Aves", "Reptilia", "Amphibia", "Actinopterygii", "Insecta", "Arachnida"].includes(className)
+  ) {
+    category = "Fauna";
+  } else if (
+    kingdom.toLowerCase().includes("plantae") ||
+    taxon.iconicTaxonName === "Plantae"
+  ) {
+    category = "Flora";
+  }
+
+  switch (className) {
+    case "Mammalia":
+      subCategory = "Mammals";
+      break;
+    case "Aves":
+      subCategory = "Birds";
+      break;
+    case "Reptilia":
+      subCategory = "Reptiles";
+      break;
+    case "Amphibia":
+      subCategory = "Amphibians";
+      break;
+    case "Actinopterygii":
+    case "Chondrichthyes":
+      subCategory = "Fish";
+      break;
+    case "Insecta":
+    case "Arachnida":
+    case "Malacostraca":
+    case "Diplopoda":
+    case "Chilopoda":
+      subCategory = "Insects / arthropods";
+      break;
+    default:
+      if (category === "Fauna") {
+        subCategory = "Other fauna";
+      } else if (category === "Flora") {
+        subCategory = "Other flora";
+      }
+  }
+
+  return { category, subCategory };
+}
+
+
 /** Fill common / scientific / type / category / description from Vision interpretation.
  * Scientific name is set only when the Vision API response includes a resolved `taxon` (server-side lookup).
  */
@@ -85,26 +140,39 @@ export function applyInterpretationToObservationFields(
   callbacks.setCommonName(normalizedCommonName);
   callbacks.setScientificName(scientific);
 
-  const inferred = inferObservationType(interpretation);
-  const chosenType: ObservationType =
-    inferred ?? (interpretation.faunaSupport >= interpretation.floraSupport ? "Fauna" : "Flora");
+  let chosenType: ObservationType;
+  let matchedCategory = "";
+
+  if (taxon && (taxon.kingdom || taxon.className || taxon.iconicTaxonName)) {
+    const mapped = getCategoryFromTaxonomy(taxon);
+    chosenType = mapped.category;
+    matchedCategory = mapped.subCategory;
+  } else {
+    const inferred = inferObservationType(interpretation);
+    chosenType = inferred ?? (interpretation.faunaSupport >= interpretation.floraSupport ? "Fauna" : "Flora");
+  }
+
   callbacks.setType(chosenType);
 
   const opts = OBSERVATION_CATEGORY_OPTIONS[chosenType];
-  const categoryHints = [
-    normalizedCommonName,
-    scientific,
-    ...interpretation.alternateIdentifications.map((a) => a.name),
-    ...interpretation.webEntities.map((w) => w.description),
-    ...(chosenType === "Flora" ? interpretation.floraSignals : interpretation.faunaSignals),
-  ]
-    .map((t) => t.trim())
-    .filter(Boolean);
+  
+  if (!matchedCategory || !opts.includes(matchedCategory)) {
+    const categoryHints = [
+      normalizedCommonName,
+      scientific,
+      ...interpretation.alternateIdentifications.map((a) => a.name),
+      ...interpretation.webEntities.map((w) => w.description),
+      ...(chosenType === "Flora" ? interpretation.floraSignals : interpretation.faunaSignals),
+    ]
+      .map((t) => t.trim())
+      .filter(Boolean);
 
-  const matchedCategory =
-    categoryHints
-      .map((hint) => matchCategory(opts, hint))
-      .find((candidate) => candidate !== opts[0]) ?? matchCategory(opts, normalizedCommonName);
+    matchedCategory =
+      categoryHints
+        .map((hint) => matchCategory(opts, hint))
+        .find((candidate) => candidate !== opts[0]) ?? matchCategory(opts, normalizedCommonName);
+  }
+
   callbacks.setCategory(matchedCategory);
   const alt = interpretation.alternateIdentifications
     .slice(0, 4)
@@ -112,13 +180,17 @@ export function applyInterpretationToObservationFields(
     .join(", ");
   const lookupNote = taxon
     ? ` · Taxon lookup: ${
-        taxon.source === "google_kg"
-          ? "Google KG"
-          : taxon.source === "wikidata"
-            ? "Wikidata"
-            : taxon.source === "inaturalist"
-              ? "iNaturalist"
-              : "Wikipedia"
+        taxon.source === "gbif"
+          ? "GBIF"
+          : taxon.source === "inaturalist"
+            ? "iNaturalist"
+            : taxon.source === "manual"
+              ? "Manual Map"
+              : taxon.source === "google_kg"
+                ? "Google KG"
+                : taxon.source === "wikidata"
+                  ? "Wikidata"
+                  : "Wikipedia"
       }`
     : "";
   const aiLine = `[AI] Pangunahing hula: ${normalizedCommonName} (${(interpretation.primaryScore * 100).toFixed(1)}%)${alt ? ` · Iba pa: ${alt}` : ""}${lookupNote}`;
