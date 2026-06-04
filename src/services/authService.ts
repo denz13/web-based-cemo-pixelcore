@@ -201,3 +201,25 @@ export const onAuthStateChange = (callback: (user: AuthUser | null) => void) => 
     authListeners.delete(callback);
   };
 };
+
+/** Display name + timestamp lines for photo watermark overlay */
+export async function getPhotoWatermarkLines(): Promise<{
+  stampLabel: string;
+  primary: string;
+  secondary: string;
+}> {
+  await Promise.resolve();
+  const s = readDevSession();
+  const name =
+    s && (s.firstName.trim() || s.lastName.trim())
+      ? `${s.firstName} ${s.lastName}`.trim()
+      : s?.email?.split("@")[0] ?? "Guest observer";
+  const email = s?.email?.trim();
+  const stampLabel = name.toUpperCase();
+  const primary = email ? email : "Flora Fauna Observation";
+  const secondary = new Date().toLocaleString("en-PH", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+  return { stampLabel, primary, secondary };
+}

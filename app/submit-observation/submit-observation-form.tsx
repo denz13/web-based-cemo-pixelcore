@@ -6,7 +6,9 @@ import type { VisionInterpretation } from "@/src/lib/visionInterpretation";
 import type { TaxonResolution } from "@/lib/taxon-resolve";
 import { ObservationDetailsSection } from "@/components/observation/ObservationDetailsSection";
 import { fileToDataUrl } from "@/lib/observation-form-helpers";
+import { applyPhotoWatermarkBatch } from "@/lib/photo-watermark";
 import { MAX_OBSERVATION_FILES } from "@/lib/submit-observation";
+import { getPhotoWatermarkLines } from "@/src/services/authService";
 
 function UploadIcon() {
   return (
@@ -93,10 +95,16 @@ const photoTips = [
   "Include scale reference when possible",
 ];
 
-export default function SubmitObservationForm() {
+export default function SubmitObservationForm({
+  watermarkFromAuth = false,
+}: {
+  /** Burn logged-in user info onto uploaded photos (species recognition page). */
+  watermarkFromAuth?: boolean;
+}) {
   const [files, setFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   const [aiBusy, setAiBusy] = useState(false);
+  const [watermarkBusy, setWatermarkBusy] = useState(false);
   const [aiNotice, setAiNotice] = useState<string | null>(null);
   const [visionInterpretation, setVisionInterpretation] =
     useState<VisionInterpretation | null>(null);
@@ -113,6 +121,37 @@ export default function SubmitObservationForm() {
       setResolvedTaxon(null);
     }
   }
+
+  const processUploadedFiles = useCallback(
+    async (rawFiles: File[]) => {
+      const slice = rawFiles.slice(0, MAX_OBSERVATION_FILES);
+      if (slice.length === 0) {
+        updateFiles([]);
+        return;
+      }
+      if (!watermarkFromAuth) {
+        updateFiles(slice);
+        return;
+      }
+      setWatermarkBusy(true);
+      try {
+        const lines = await getPhotoWatermarkLines();
+        const stamped = await applyPhotoWatermarkBatch(slice, lines);
+        updateFiles(stamped);
+        if (!stamped.some((f) => f.name.includes("-watermarked"))) {
+          setAiNotice(
+            "Hindi ma-apply ang watermark sa larawang ito — subukang JPG o PNG."
+          );
+        }
+      } catch {
+        updateFiles(slice);
+        setAiNotice("Hindi ma-apply ang watermark. Na-upload ang orihinal na larawan.");
+      } finally {
+        setWatermarkBusy(false);
+      }
+    },
+    [watermarkFromAuth]
+  );
 
   const runAiIdentify = useCallback(async () => {
     if (files.length === 0) {
@@ -178,7 +217,7 @@ export default function SubmitObservationForm() {
 
             <label
               htmlFor="photo-upload"
-              className="mt-7 flex cursor-pointer flex-col items-center justify-center rounded-[1.5rem] border border-dashed border-[#d5dfd4] px-6 py-10 text-center text-[var(--muted-foreground)] transition-colors hover:border-[var(--brand-600)] hover:bg-[var(--brand-50)]/35"
+              className={`mt-7 flex cursor-pointer flex-col items-center justify-center rounded-[1.5rem] border border-dashed border-[#d5dfd4] px-6 py-10 text-center text-[var(--muted-foreground)] transition-colors hover:border-[var(--brand-600)] hover:bg-[var(--brand-50)]/35 ${watermarkBusy ? "pointer-events-none opacity-60" : ""}`}
             >
               <UploadIcon />
               <p className="mt-5 text-2xl font-medium text-[var(--foreground)]">
@@ -195,14 +234,18 @@ export default function SubmitObservationForm() {
                 multiple
                 className="sr-only"
                 onChange={(event) => {
-                  const nextFiles = Array.from(event.target.files ?? []).slice(
-                    0,
-                    MAX_OBSERVATION_FILES,
-                  );
-                  updateFiles(nextFiles);
+                  const nextFiles = Array.from(event.target.files ?? []);
+                  void processUploadedFiles(nextFiles);
+                  event.target.value = "";
                 }}
               />
             </label>
+
+            {watermarkBusy ? (
+              <p className="mt-3 text-center text-sm text-[var(--muted-foreground)]">
+                Nilalagyan ng watermark…
+              </p>
+            ) : null}
 
             {previewUrls.length > 0 ? (
               <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -216,7 +259,7 @@ export default function SubmitObservationForm() {
                       alt={`Observation preview ${index + 1}`}
                       fill
                       unoptimized
-                      className="object-cover"
+                      className="object-contain"
                     />
                   </div>
                 ))}
@@ -226,7 +269,7 @@ export default function SubmitObservationForm() {
             <button
               type="button"
               onClick={() => void runAiIdentify()}
-              disabled={files.length === 0 || aiBusy}
+              disabled={files.length === 0 || aiBusy || watermarkBusy}
               className={`mt-5 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl border px-4 text-base font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
                 files.length > 0
                   ? "border-[var(--brand-600)] bg-[var(--brand-50)] text-[var(--brand-800)] hover:bg-[var(--brand-100)]"
